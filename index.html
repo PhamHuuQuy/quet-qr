@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quét QR chi tiết</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --ink:#1b2733; --mute:#5c6b7a; --pri:#1f6feb; --ok:#1a7f37; --warn:#b54708; --line:#d8dee4; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 16px; background:#1f4e78; color:#fff; font-weight:600; font-size:18px; }
+  main { padding:12px 16px 32px; max-width:520px; margin:0 auto; }
+  .cam { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:1/1; }
+  video { width:100%; height:100%; object-fit:cover; display:block; }
+  .frame { position:absolute; inset:18%; border:3px solid rgba(255,255,255,.85); border-radius:14px; pointer-events:none; }
+  .msg { margin:10px 0; font-size:14px; color:var(--mute); text-align:center; min-height:20px; }
+  .msg.err { color:#b42318; } .msg.ok { color:var(--ok); font-weight:600; }
+  button { font:inherit; border:0; border-radius:10px; padding:14px 16px; font-weight:600; cursor:pointer; }
+  .btn-pri { background:var(--pri); color:#fff; } .btn-ok { background:var(--ok); color:#fff; }
+  .btn-sec { background:#e6eaef; color:var(--ink); }
+  button:disabled { opacity:.55; }
+  .row { display:flex; gap:10px; } .row > * { flex:1; }
+  .block { margin-top:12px; } .block > button { width:100%; }
+  details { margin-top:14px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  summary { cursor:pointer; color:var(--mute); font-size:14px; }
+  textarea, input[type=text] { width:100%; min-height:36px; margin:10px 0; font:inherit; padding:8px; border:1px solid var(--line); border-radius:8px; }
+  #overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding:16px; z-index:10; }
+  #overlay.show { display:flex; }
+  .dlg { background:var(--card); border-radius:14px; width:100%; max-width:420px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,.3); }
+  .dlg h2 { margin:0 0 12px; font-size:18px; }
+  .kv { display:grid; grid-template-columns:100px 1fr; gap:6px 10px; font-size:16px; margin-bottom:12px; }
+  .kv b { color:var(--mute); font-weight:500; } .kv span { font-weight:600; word-break:break-word; }
+  .warn { background:#fff4e5; color:var(--warn); border-radius:8px; padding:8px 10px; font-size:14px; margin-bottom:8px; }
+  .warn:empty { display:none; }
+  #setup { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; font-size:14px; }
+  #setup.hide { display:none; }
+</style>
+</head>
+<body>
+<header>Quét QR chi tiết</header>
+<main>
+  <div id="setup">
+    Chưa có địa chỉ Apps Script. Dán URL ứng dụng web (dạng .../exec) rồi bấm Lưu:
+    <input type="text" id="apiUrl" placeholder="https://script.google.com/macros/s/AKfycb.../exec">
+    <button class="btn-pri" id="saveUrl" style="width:100%">Lưu địa chỉ</button>
+  </div>
+
+  <div class="cam" id="camBox" hidden>
+    <video id="video" playsinline muted></video>
+    <div class="frame"></div>
+  </div>
+  <div class="msg" id="status">Đang bật camera…</div>
+
+  <div class="block" id="photoBlock" hidden>
+    <input type="file" id="photo" accept="image/*" capture="environment" hidden>
+    <button class="btn-pri" id="photoBtn">📷 Chụp ảnh mã QR</button>
+  </div>
+
+  <details>
+    <summary>Nhập / dán nội dung QR thủ công</summary>
+    <textarea id="manual" placeholder="Dòng 1: Part&#10;Dòng 2: Tag No&#10;Dòng 3: 1/2"></textarea>
+    <button class="btn-sec" id="manualBtn" style="width:100%">Dùng nội dung này</button>
+  </details>
+
+  <details>
+    <summary>Đổi địa chỉ Apps Script</summary>
+    <input type="text" id="apiUrl2" placeholder="https://script.google.com/macros/s/AKfycb.../exec">
+    <button class="btn-sec" id="saveUrl2" style="width:100%">Lưu</button>
+  </details>
+</main>
+
+<div id="overlay">
+  <div class="dlg">
+    <h2>Thông tin chi tiết</h2>
+    <div class="kv">
+      <b>Part:</b><span id="vPart"></span>
+      <b>Tag No:</b><span id="vTag"></span>
+      <b>Số thứ tự:</b><span id="vSeq"></span>
+    </div>
+    <div class="warn" id="vWarn"></div>
+    <div class="row">
+      <button class="btn-sec" id="btnSkip">Bỏ qua</button>
+      <button class="btn-ok" id="btnOk">Xác nhận</button>
+    </div>
+  </div>
+</div>
+
+<canvas id="canvas" hidden></canvas>
+<script>
+(function () {
+  var video = document.getElementById('video'), canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d', { willReadFrequently: true });
+  var statusEl = document.getElementById('status');
+  var current = null, paused = false, stream = null;
+
+  /* ---- Địa chỉ Apps Script (lưu trong trình duyệt của máy này) ---- */
+  var DEFAULT_API = 'https://script.google.com/macros/s/AKfycbwimeDgILSyiLSZndI4Gk5_wDAWqmPmwg_l6PBU85XnFxdmM0ivy5q1ima6Phvvh7_Z-Q/exec';
+  var API = DEFAULT_API;
+  try { API = localStorage.getItem('qr_api_url') || DEFAULT_API; } catch (e) {}
+  function refreshSetupUI() {
+    var box = document.getElementById('setup');
+    if (API) { box.classList.add('hide'); } else { box.classList.remove('hide'); }
+  }
+  function saveApi(url) {
+    url = (url || '').trim();
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) {
+      alert('URL chưa đúng định dạng. Phải kết thúc bằng /exec và bắt đầu bằng https://script.google.com/macros/s/');
+      return;
+    }
+    API = url;
+    try { localStorage.setItem('qr_api_url', API); } catch (e) {}
+    document.getElementById('apiUrl').value = API;
+    document.getElementById('apiUrl2').value = API;
+    refreshSetupUI();
+    setStatus('Đã lưu địa chỉ. Đưa mã QR vào khung để quét.');
+  }
+  document.getElementById('saveUrl').onclick = function () { saveApi(document.getElementById('apiUrl').value); };
+  document.getElementById('saveUrl2').onclick = function () { saveApi(document.getElementById('apiUrl2').value); };
+  if (API) { document.getElementById('apiUrl').value = API; document.getElementById('apiUrl2').value = API; }
+  refreshSetupUI();
+
+  function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = 'msg' + (cls ? ' ' + cls : ''); }
+
+  /* ---- Đọc nội dung QR: 3 dòng Part / Tag No / n/N ---- */
+  function parse(text) {
+    var lines = String(text || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+    if (lines.length < 3) return null;
+    var m = lines[2].match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (!m) return null;
+    return { part: lines[0], tag: lines[1], seq: parseInt(m[1], 10), total: parseInt(m[2], 10) };
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  function handleText(text) {
+    var d = parse(text);
+    if (!d) { setStatus('Mã QR không đúng định dạng (cần 3 dòng: Part, Tag No, n/N).', 'err'); return false; }
+    if (!API) { setStatus('Chưa lưu địa chỉ Apps Script ở trên.', 'err'); return false; }
+    paused = true; current = d;
+    document.getElementById('vPart').textContent = d.part;
+    document.getElementById('vTag').textContent = d.tag;
+    document.getElementById('vSeq').textContent = d.seq + '/' + d.total;
+    var w = document.getElementById('vWarn'); w.textContent = '';
+    document.getElementById('overlay').classList.add('show');
+    if (navigator.vibrate) navigator.vibrate(60);
+
+    var q = API + '?action=traCuu&part=' + encodeURIComponent(d.part) +
+      '&tag=' + encodeURIComponent(d.tag) + '&seq=' + d.seq + '&total=' + d.total;
+    fetch(q).then(function (r) { return r.json(); }).then(function (r) {
+      if (current === d) w.innerHTML = (r.canhBao || []).map(function (x) { return '⚠ ' + esc(x); }).join('<br>');
+    }).catch(function () {
+      if (current === d) w.innerHTML = '⚠ Không tra cứu được (kiểm tra kết nối mạng).';
+    });
+    return true;
+  }
+
+  function closeDialog() { document.getElementById('overlay').classList.remove('show'); current = null; }
+  function resume(msg) { paused = false; setStatus(msg || 'Đưa mã QR vào khung để quét.'); }
+
+  document.getElementById('btnSkip').onclick = function () { closeDialog(); resume('Đã bỏ qua. Quét mã tiếp theo.'); };
+  document.getElementById('btnOk').onclick = function () {
+    var d = current, btn = this; if (!d) return;
+    btn.disabled = true; btn.textContent = 'Đang lưu…';
+    fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'luuQuet', part: d.part, tag: d.tag, seq: d.seq, total: d.total })
+    }).then(function (r) { return r.json(); }).then(function (r) {
+      btn.disabled = false; btn.textContent = 'Xác nhận';
+      if (!r.ok) { document.getElementById('vWarn').textContent = 'Lỗi lưu: ' + (r.error || ''); return; }
+      closeDialog();
+      setStatus('✔ Đã lưu ' + d.part + ' – ' + d.tag + ' (' + d.seq + '/' + d.total + '), lần quét thứ ' + r.lan, 'ok');
+      setTimeout(function () { resume(statusEl.textContent); }, 1200);
+    }).catch(function () {
+      btn.disabled = false; btn.textContent = 'Xác nhận';
+      document.getElementById('vWarn').textContent = 'Lỗi mạng, thử lại.';
+    });
+  };
+
+  /* ---- Camera trực tiếp ---- */
+  function tick() {
+    if (!stream) return;
+    if (!paused && video.readyState >= 2 && video.videoWidth) {
+      var w = video.videoWidth, h = video.videoHeight, s = Math.min(1, 720 / Math.max(w, h));
+      canvas.width = Math.round(w * s); canvas.height = Math.round(h * s);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      var code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      if (code && code.data) handleText(code.data);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return noCamera();
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+      .then(function (s) {
+        stream = s; video.srcObject = s; video.play();
+        document.getElementById('camBox').hidden = false;
+        document.getElementById('photoBlock').hidden = false;
+        setStatus('Đưa mã QR vào khung để quét.');
+        requestAnimationFrame(tick);
+      })
+      .catch(noCamera);
+  }
+  function noCamera() {
+    document.getElementById('photoBlock').hidden = false;
+    setStatus('Không bật được camera trực tiếp. Bấm "Chụp ảnh mã QR" để quét bằng ảnh chụp.', 'err');
+  }
+
+  /* ---- Chụp ảnh (dự phòng) ---- */
+  document.getElementById('photoBtn').onclick = function () { document.getElementById('photo').click(); };
+  document.getElementById('photo').onchange = function (e) {
+    var f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    var url = URL.createObjectURL(f), im = new Image();
+    im.onload = function () {
+      var found = null;
+      [1600, 1000, 600].some(function (max) {
+        var s = Math.min(1, max / Math.max(im.width, im.height));
+        canvas.width = Math.round(im.width * s); canvas.height = Math.round(im.height * s);
+        ctx.drawImage(im, 0, 0, canvas.width, canvas.height);
+        var d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        var c = jsQR(d.data, d.width, d.height, { inversionAttempts: 'attemptBoth' });
+        if (c && c.data) { found = c.data; return true; } return false;
+      });
+      URL.revokeObjectURL(url);
+      if (found) handleText(found); else setStatus('Không đọc được mã QR trong ảnh. Chụp gần và rõ hơn rồi thử lại.', 'err');
+    };
+    im.src = url;
+  };
+
+  document.getElementById('manualBtn').onclick = function () { handleText(document.getElementById('manual').value); };
+
+  startCamera();
+})();
+</script>
+</body>
+</html>
