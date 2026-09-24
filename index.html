@@ -4,7 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quét QR chi tiết</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script>
+  /* Thử tải thư viện đọc mã QR từ nhiều nguồn khác nhau — nếu nguồn này bị mạng chặn thì tự chuyển sang nguồn khác. */
+  (function () {
+    var sources = [
+      'https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js',
+      'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js',
+      'https://unpkg.com/jsqr@1.4.0/dist/jsQR.min.js'
+    ];
+    window.__jsQrLoadError = null;
+    function tryLoad(i) {
+      if (i >= sources.length) { window.__jsQrLoadError = 'Không tải được thư viện đọc mã QR từ bất kỳ nguồn nào (mạng đang chặn).'; return; }
+      var s = document.createElement('script');
+      s.src = sources[i];
+      s.onload = function () { window.__jsQrLoaded = true; };
+      s.onerror = function () { tryLoad(i + 1); };
+      document.head.appendChild(s);
+    }
+    tryLoad(0);
+  })();
+</script>
 <style>
   :root { --bg:#f4f6f8; --card:#fff; --ink:#1b2733; --mute:#5c6b7a; --pri:#1f6feb; --ok:#1a7f37; --warn:#b54708; --line:#d8dee4; }
   * { box-sizing: border-box; }
@@ -183,28 +202,51 @@
   };
  
   /* ---- Camera trực tiếp ---- */
+  var scanErrCount = 0;
   function tick() {
     if (!stream) return;
-    if (!paused && video.readyState >= 2 && video.videoWidth) {
-      var w = video.videoWidth, h = video.videoHeight, s = Math.min(1, 720 / Math.max(w, h));
-      canvas.width = Math.round(w * s); canvas.height = Math.round(h * s);
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      var code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
-      if (code && code.data) handleText(code.data);
+    try {
+      if (!paused && video.readyState >= 2 && video.videoWidth) {
+        if (typeof jsQR !== 'function') {
+          setStatus('⚠ Thư viện đọc mã QR chưa sẵn sàng (mạng chặn). Dùng "Chụp ảnh mã QR" bên dưới thay thế.', 'err');
+        } else {
+          // Chỉ lấy đúng vùng bên trong khung trắng (giống .frame CSS: inset 18%) rồi phóng to lên để đọc mã nhỏ tốt hơn.
+          var vw = video.videoWidth, vh = video.videoHeight;
+          var side = Math.min(vw, vh);
+          var offX = (vw - side) / 2, offY = (vh - side) / 2;
+          var pad = side * 0.16; // hơi rộng hơn khung hiển thị một chút cho dễ canh
+          var sx = offX + pad, sy = offY + pad, ssize = side - pad * 2;
+          var OUT = 900;
+          canvas.width = OUT; canvas.height = OUT;
+          ctx.drawImage(video, sx, sy, ssize, ssize, 0, 0, OUT, OUT);
+          var img = ctx.getImageData(0, 0, OUT, OUT);
+          var code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+          if (code && code.data) handleText(code.data);
+        }
+      }
+    } catch (err) {
+      scanErrCount++;
+      if (scanErrCount <= 2) setStatus('⚠ Lỗi khi quét: ' + (err && err.message ? err.message : err), 'err');
     }
     requestAnimationFrame(tick);
   }
  
   function startCamera(done) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { noCamera(); if (done) done(); return; }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1920 } },
+      audio: false
+    })
       .then(function (s) {
         stream = s; video.srcObject = s; video.play();
         document.getElementById('startBlock').hidden = true;
         document.getElementById('camBox').hidden = false;
         document.getElementById('photoBlock').hidden = false;
-        setStatus('Đưa mã QR vào khung để quét.');
+        if (typeof jsQR !== 'function') {
+          setStatus('⚠ Thư viện đọc mã QR chưa tải xong hoặc bị mạng chặn. Đang chờ… nếu không tự hết, dùng "Chụp ảnh mã QR".', 'err');
+        } else {
+          setStatus('Đưa mã QR vào khung để quét.');
+        }
         requestAnimationFrame(tick);
         if (done) done();
       })
@@ -226,6 +268,10 @@
   document.getElementById('photoBtn').onclick = function () { document.getElementById('photo').click(); };
   document.getElementById('photo').onchange = function (e) {
     var f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (typeof jsQR !== 'function') {
+      setStatus('⚠ Thư viện đọc mã QR chưa tải được (mạng đang chặn cdnjs.cloudflare.com / jsdelivr.net / unpkg.com). Thử đổi sang mạng 4G, hoặc dùng "Nhập / dán nội dung QR thủ công" bên dưới.', 'err');
+      return;
+    }
     var url = URL.createObjectURL(f), im = new Image();
     im.onload = function () {
       var found = null;
@@ -248,3 +294,4 @@
 </script>
 </body>
 </html>
+ 
