@@ -118,7 +118,7 @@
   var current = null, paused = false, stream = null;
  
   /* ---- Địa chỉ Apps Script (lưu trong trình duyệt của máy này) ---- */
-  var DEFAULT_API = 'https://script.google.com/macros/s/AKfycbwpK3-UFAiZoQ9p49am-0zAMN9zedYt-IZFUXozukQh/dev';
+  var DEFAULT_API = 'https://script.google.com/macros/s/AKfycbwimeDgILSyiLSZndI4Gk5_wDAWqmPmwg_l6PBU85XnFxdmM0ivy5q1ima6Phvvh7_Z-Q/exec';
   var API = DEFAULT_API;
   try { API = localStorage.getItem('qr_api_url') || DEFAULT_API; } catch (e) {}
   function refreshSetupUI() {
@@ -290,6 +290,32 @@
   };
  
   document.getElementById('manualBtn').onclick = function () { handleText(document.getElementById('manual').value); };
+ 
+  /* ---- Máy quét mã vạch/QR rời (USB hoặc Bluetooth, kiểu giả lập bàn phím - HID) ----
+     Máy quét "gõ" nội dung mã QR ra như gõ bàn phím rất nhanh (mỗi ký tự cách nhau vài mili-giây),
+     rồi bấm Enter khi xong. Ta gom các ký tự gõ liên tục, hễ ngừng gõ một khoảng ngắn thì coi là
+     quét xong và xử lý luôn — không cần bấm nút nào cả. Không ảnh hưởng khi người dùng gõ tay chậm
+     vào các ô nhập liệu khác (URL, ô nhập thủ công) vì lúc đó phím đang được ô đó xử lý riêng. */
+  (function () {
+    var buf = '', timer = null;
+    document.addEventListener('keydown', function (e) {
+      var el = document.activeElement;
+      var typingInField = el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
+      if (typingInField) return; // đang gõ tay vào ô nào đó thì bỏ qua, tránh nhiễu
+      if (e.key === 'Enter') {
+        buf += '\n';
+      } else if (e.key && e.key.length === 1) {
+        buf += e.key;
+      } else {
+        return;
+      }
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        var text = buf; buf = '';
+        if (text.trim().length >= 5) handleText(text);
+      }, 150);
+    });
+  })();
 })();
 </script>
 </body>
