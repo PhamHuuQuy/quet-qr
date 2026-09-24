@@ -45,31 +45,35 @@
     <input type="text" id="apiUrl" placeholder="https://script.google.com/macros/s/AKfycb.../exec">
     <button class="btn-pri" id="saveUrl" style="width:100%">Lưu địa chỉ</button>
   </div>
-
+ 
   <div class="cam" id="camBox" hidden>
     <video id="video" playsinline muted></video>
     <div class="frame"></div>
   </div>
-  <div class="msg" id="status">Đang bật camera…</div>
-
-  <div class="block" id="photoBlock" hidden>
-    <input type="file" id="photo" accept="image/*" capture="environment" hidden>
-    <button class="btn-pri" id="photoBtn">📷 Chụp ảnh mã QR</button>
+  <div class="msg" id="status">Chọn cách quét bên dưới.</div>
+ 
+  <div class="block" id="startBlock">
+    <button class="btn-pri" id="startBtn">🎥 Bật camera quét trực tiếp</button>
   </div>
-
+ 
+  <div class="block" id="photoBlock">
+    <input type="file" id="photo" accept="image/*" capture="environment" hidden>
+    <button class="btn-sec" id="photoBtn">📷 Chụp ảnh mã QR</button>
+  </div>
+ 
   <details>
     <summary>Nhập / dán nội dung QR thủ công</summary>
     <textarea id="manual" placeholder="Dòng 1: Part&#10;Dòng 2: Tag No&#10;Dòng 3: 1/2"></textarea>
     <button class="btn-sec" id="manualBtn" style="width:100%">Dùng nội dung này</button>
   </details>
-
+ 
   <details>
     <summary>Đổi địa chỉ Apps Script</summary>
     <input type="text" id="apiUrl2" placeholder="https://script.google.com/macros/s/AKfycb.../exec">
     <button class="btn-sec" id="saveUrl2" style="width:100%">Lưu</button>
   </details>
 </main>
-
+ 
 <div id="overlay">
   <div class="dlg">
     <h2>Thông tin chi tiết</h2>
@@ -85,7 +89,7 @@
     </div>
   </div>
 </div>
-
+ 
 <canvas id="canvas" hidden></canvas>
 <script>
 (function () {
@@ -93,7 +97,7 @@
   var ctx = canvas.getContext('2d', { willReadFrequently: true });
   var statusEl = document.getElementById('status');
   var current = null, paused = false, stream = null;
-
+ 
   /* ---- Địa chỉ Apps Script (lưu trong trình duyệt của máy này) ---- */
   var DEFAULT_API = 'https://script.google.com/macros/s/AKfycbwimeDgILSyiLSZndI4Gk5_wDAWqmPmwg_l6PBU85XnFxdmM0ivy5q1ima6Phvvh7_Z-Q/exec';
   var API = DEFAULT_API;
@@ -119,9 +123,9 @@
   document.getElementById('saveUrl2').onclick = function () { saveApi(document.getElementById('apiUrl2').value); };
   if (API) { document.getElementById('apiUrl').value = API; document.getElementById('apiUrl2').value = API; }
   refreshSetupUI();
-
+ 
   function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = 'msg' + (cls ? ' ' + cls : ''); }
-
+ 
   /* ---- Đọc nội dung QR: 3 dòng Part / Tag No / n/N ---- */
   function parse(text) {
     var lines = String(text || '').split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
@@ -130,9 +134,9 @@
     if (!m) return null;
     return { part: lines[0], tag: lines[1], seq: parseInt(m[1], 10), total: parseInt(m[2], 10) };
   }
-
+ 
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
-
+ 
   function handleText(text) {
     var d = parse(text);
     if (!d) { setStatus('Mã QR không đúng định dạng (cần 3 dòng: Part, Tag No, n/N).', 'err'); return false; }
@@ -144,7 +148,7 @@
     var w = document.getElementById('vWarn'); w.textContent = '';
     document.getElementById('overlay').classList.add('show');
     if (navigator.vibrate) navigator.vibrate(60);
-
+ 
     var q = API + '?action=traCuu&part=' + encodeURIComponent(d.part) +
       '&tag=' + encodeURIComponent(d.tag) + '&seq=' + d.seq + '&total=' + d.total;
     fetch(q).then(function (r) { return r.json(); }).then(function (r) {
@@ -154,10 +158,10 @@
     });
     return true;
   }
-
+ 
   function closeDialog() { document.getElementById('overlay').classList.remove('show'); current = null; }
   function resume(msg) { paused = false; setStatus(msg || 'Đưa mã QR vào khung để quét.'); }
-
+ 
   document.getElementById('btnSkip').onclick = function () { closeDialog(); resume('Đã bỏ qua. Quét mã tiếp theo.'); };
   document.getElementById('btnOk').onclick = function () {
     var d = current, btn = this; if (!d) return;
@@ -177,7 +181,7 @@
       document.getElementById('vWarn').textContent = 'Lỗi mạng, thử lại.';
     });
   };
-
+ 
   /* ---- Camera trực tiếp ---- */
   function tick() {
     if (!stream) return;
@@ -191,24 +195,33 @@
     }
     requestAnimationFrame(tick);
   }
-
-  function startCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return noCamera();
+ 
+  function startCamera(done) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { noCamera(); if (done) done(); return; }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
       .then(function (s) {
         stream = s; video.srcObject = s; video.play();
+        document.getElementById('startBlock').hidden = true;
         document.getElementById('camBox').hidden = false;
         document.getElementById('photoBlock').hidden = false;
         setStatus('Đưa mã QR vào khung để quét.');
         requestAnimationFrame(tick);
+        if (done) done();
       })
-      .catch(noCamera);
+      .catch(function () { noCamera(); if (done) done(); });
   }
   function noCamera() {
+    document.getElementById('startBlock').hidden = false;
     document.getElementById('photoBlock').hidden = false;
-    setStatus('Không bật được camera trực tiếp. Bấm "Chụp ảnh mã QR" để quét bằng ảnh chụp.', 'err');
+    setStatus('Không bật được camera trực tiếp (trình duyệt từ chối hoặc chưa cấp quyền). Bấm "Chụp ảnh mã QR" để quét bằng ảnh chụp, hoặc thử lại nút Bật camera.', 'err');
   }
-
+ 
+  document.getElementById('startBtn').onclick = function () {
+    this.disabled = true; this.textContent = 'Đang mở camera…';
+    var self = this;
+    startCamera(function () { self.textContent = 'Bật camera quét trực tiếp'; self.disabled = false; });
+  };
+ 
   /* ---- Chụp ảnh (dự phòng) ---- */
   document.getElementById('photoBtn').onclick = function () { document.getElementById('photo').click(); };
   document.getElementById('photo').onchange = function (e) {
@@ -229,10 +242,8 @@
     };
     im.src = url;
   };
-
+ 
   document.getElementById('manualBtn').onclick = function () { handleText(document.getElementById('manual').value); };
-
-  startCamera();
 })();
 </script>
 </body>
